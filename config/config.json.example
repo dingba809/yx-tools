@@ -1,0 +1,25 @@
+{
+  "cf_enabled": false,
+  "cf_api_token": "YOUR_CLOUDFLARE_API_TOKEN",
+  "cf_zone_id": "YOUR_CLOUDFLARE_ZONE_ID",
+  "cf_domain_name": "cf.yourdomain.com",
+  "cf_ttl": 60,
+  "cf_proxied": false,
+  "cf_upload_count": 3,
+
+  "ros_enabled": false,
+  "ros_host": "192.168.1.1",
+  "ros_port": 443,
+  "ros_use_ssl": true,
+  "ros_verify_ssl": false,
+  "ros_username": "admin",
+  "ros_password": "YOUR_ROS_PASSWORD",
+  "ros_address_list": "cloudflare_ips",
+  "ros_comment": "cf_speedtest",
+  "ros_upload_count": 3,
+  "ros_timeout": 10,
+
+  "xray_enabled": false,
+  "xray_config_path": "/etc/xray/config.json",
+  "xray_restart_cmd": "systemctl restart xray"
+}

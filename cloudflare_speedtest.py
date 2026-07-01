@@ -19,7 +19,7 @@ from datetime import datetime
 
 
 # 使用curl的备用HTTP请求函数（解决SSL模块不可用的问题）
-def curl_request(url, method='GET', data=None, headers=None, timeout=30):
+def curl_request(url, method='GET', data=None, headers=None, timeout=30, insecure=False):
     """
     使用curl命令进行HTTP请求（当requests的SSL模块不可用时使用）
     
@@ -29,11 +29,14 @@ def curl_request(url, method='GET', data=None, headers=None, timeout=30):
         data: 请求数据（将被转换为JSON）
         headers: 请求头字典
         timeout: 超时时间（秒）
+        insecure: 是否忽略SSL证书验证错误（对本地RouterOS自签名证书非常有用）
     
     Returns:
         dict: 包含status_code、json、text等属性的响应对象模拟
     """
     cmd = ['curl', '-s', '-w', '\\n%{http_code}', '-X', method, '--connect-timeout', str(timeout)]
+    if insecure:
+        cmd.append('--insecure')
     
     # 添加请求头
     if headers:
@@ -1272,6 +1275,9 @@ def handle_beginner_mode(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
         print("📊 您可以查看 result.csv 文件来了解详细的测试结果")
         print("💡 提示：结果文件中的IP按速度从快到慢排序")
         
+        # 自动更新 DNS 和 RouterOS Address List
+        auto_update_dns_and_ros("result.csv")
+        
         # 询问是否上报结果
         upload_info = upload_results_to_api("result.csv")
         
@@ -1500,6 +1506,9 @@ def handle_normal_mode(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
             
             if result.returncode == 0:
                 print("\n✅ 测速完成！结果已保存到 result.csv")
+                
+                # 自动更新 DNS 和 RouterOS Address List
+                auto_update_dns_and_ros("result.csv")
                 
                 # 询问是否上报结果
                 upload_info = upload_results_to_api("result.csv")
@@ -1857,6 +1866,9 @@ def run_with_args(args):
         if result.returncode == 0:
             print("\n✅ 测速完成！结果已保存到 result.csv")
             
+            # 自动更新 DNS 和 RouterOS Address List
+            auto_update_dns_and_ros("result.csv")
+            
             # 处理上传
             if args.upload == 'api':
                 if not args.worker_domain or not args.uuid:
@@ -1948,6 +1960,9 @@ def run_with_args(args):
         
         if result.returncode == 0:
             print("\n✅ 测速完成！结果已保存到 result.csv")
+            
+            # 自动更新 DNS 和 RouterOS Address List
+            auto_update_dns_and_ros("result.csv")
             
             # 处理上传
             if args.upload == 'api':
@@ -2713,6 +2728,410 @@ def clear_config():
     except Exception as e:
         print(f"⚠️  清除配置失败: {e}")
         return False
+
+
+def load_config_extended():
+    """从多个可能的配置文件路径加载配置，并进行合并"""
+    paths_to_check = [
+        "config/config.json",
+        "config/.cloudflare_speedtest_config.json",
+        ".cloudflare_speedtest_config.json",
+        "/app/config/config.json",
+        "/app/config/.cloudflare_speedtest_config.json"
+    ]
+    config = {}
+    for path in paths_to_check:
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        config.update(data)
+            except Exception as e:
+                print(f"⚠️ 读取配置文件 {path} 失败: {e}")
+    return config
+
+
+def update_cloudflare_dns(ips, config):
+    """自动更新 Cloudflare DNS 记录"""
+    cf_enabled = config.get("cf_enabled", False)
+    if not cf_enabled:
+        return
+        
+    api_token = config.get("cf_api_token")
+    zone_id = config.get("cf_zone_id")
+    domain_name = config.get("cf_domain_name")
+    
+    if not api_token or not zone_id or not domain_name:
+        print("❌ Cloudflare DNS 自动更新失败: 缺少必要配置 cf_api_token, cf_zone_id 或 cf_domain_name")
+        return
+        
+    upload_count = int(config.get("cf_upload_count", 3))
+    ttl = int(config.get("cf_ttl", 60))
+    proxied = bool(config.get("cf_proxied", False))
+    
+    best_ips = ips[:upload_count]
+    if not best_ips:
+        print("⚠️ 没有可用的优选 IP 用于更新 Cloudflare DNS")
+        return
+        
+    print(f"\n🌐 正在自动更新 Cloudflare DNS 域名: {domain_name}")
+    print(f"   准备更新的前 {len(best_ips)} 个 IP: {', '.join(best_ips)}")
+    
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json"
+    }
+    
+    # 统一请求包装函数，带 curl 自动回退
+    def cf_request(url, method='GET', data=None):
+        try:
+            if method == 'GET':
+                return requests.get(url, headers=headers, timeout=15)
+            elif method == 'POST':
+                return requests.post(url, headers=headers, json=data, timeout=15)
+            elif method == 'DELETE':
+                return requests.delete(url, headers=headers, timeout=15)
+        except Exception as e:
+            err_msg = str(e)
+            if "SSL" in err_msg or "import" in err_msg or "module" in err_msg:
+                return curl_request(url, method=method, data=data, headers=headers, timeout=15)
+            raise
+
+    try:
+        from urllib.parse import quote
+        url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?name={quote(domain_name)}"
+        res = cf_request(url, method='GET')
+        
+        if res.status_code != 200:
+            print(f"❌ 获取 Cloudflare DNS 记录失败: HTTP {res.status_code}. 错误: {res.text if hasattr(res, 'text') else ''}")
+            return
+            
+        records_data = res.json()
+        records = records_data.get("result", [])
+        
+        # 删除同名现有的 A 和 AAAA 记录，避免冲突残留
+        deleted_count = 0
+        for record in records:
+            r_type = record.get("type")
+            r_id = record.get("id")
+            r_name = record.get("name")
+            if r_type in ["A", "AAAA"] and r_name == domain_name and r_id:
+                del_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{r_id}"
+                del_res = cf_request(del_url, method='DELETE')
+                if del_res.status_code == 200:
+                    deleted_count += 1
+                else:
+                    print(f"   ⚠️ 删除旧记录 {r_type} {record.get('content')} 失败: HTTP {del_res.status_code}")
+                    
+        if deleted_count > 0:
+            print(f"   🗑️ 已成功清理 {deleted_count} 个旧的 A/AAAA 记录")
+            
+        # 添加新的优选 IP
+        added_count = 0
+        for ip in best_ips:
+            r_type = "AAAA" if ":" in ip else "A"
+            create_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
+            payload = {
+                "type": r_type,
+                "name": domain_name,
+                "content": ip,
+                "ttl": ttl,
+                "proxied": proxied
+            }
+            create_res = cf_request(create_url, method='POST', data=payload)
+            if create_res.status_code == 200 or create_res.status_code == 201:
+                added_count += 1
+                print(f"   ✅ 已成功创建 {r_type} 记录: {ip}")
+            else:
+                print(f"   ❌ 创建 {r_type} 记录 {ip} 失败: HTTP {create_res.status_code}. 错误: {create_res.text if hasattr(create_res, 'text') else ''}")
+                
+        print(f"   🎉 Cloudflare DNS 更新完毕：成功更新了 {added_count}/{len(best_ips)} 个 IP 到域名 '{domain_name}'")
+        
+    except Exception as e:
+        print(f"❌ Cloudflare API 交互过程中发生异常: {e}")
+
+
+def update_routeros_address_list(ips, config):
+    """自动更新 RouterOS 防火墙地址列表"""
+    ros_enabled = config.get("ros_enabled", False)
+    if not ros_enabled:
+        return
+        
+    ros_host = config.get("ros_host")
+    ros_username = config.get("ros_username", "admin")
+    ros_password = config.get("ros_password", "")
+    ros_address_list = config.get("ros_address_list")
+    
+    if not ros_host or not ros_address_list:
+        print("❌ RouterOS 自动更新失败: 缺少必要配置 ros_host 或 ros_address_list")
+        return
+        
+    ros_use_ssl = config.get("ros_use_ssl", True)
+    default_port = 443 if ros_use_ssl else 80
+    ros_port = int(config.get("ros_port", default_port))
+    ros_verify_ssl = config.get("ros_verify_ssl", False)
+    ros_upload_count = int(config.get("ros_upload_count", 3))
+    ros_comment = config.get("ros_comment", "cf_speedtest")
+    ros_timeout = int(config.get("ros_timeout", 10))
+    
+    best_ips = ips[:ros_upload_count]
+    if not best_ips:
+        print("⚠️ 没有可用的优选 IP 用于更新 RouterOS Address List")
+        return
+        
+    print(f"\n📶 正在自动更新 RouterOS Firewall Address List: {ros_address_list}")
+    print(f"   准备更新的前 {len(best_ips)} 个 IP: {', '.join(best_ips)}")
+    
+    proto = "https" if ros_use_ssl else "http"
+    base_url = f"{proto}://{ros_host}:{ros_port}/rest"
+    
+    # 生成 Basic Auth 凭据
+    import base64
+    credentials = f"{ros_username}:{ros_password}"
+    encoded_credentials = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
+    headers = {
+        "Authorization": f"Basic {encoded_credentials}",
+        "Content-Type": "application/json"
+    }
+    
+    # 忽略 SSL 自签名警告
+    if not ros_verify_ssl:
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except:
+            pass
+
+    # 统一请求包装函数，带 curl 自动回退
+    def ros_request(endpoint, method='GET', data=None):
+        url = f"{base_url}{endpoint}"
+        try:
+            if method == 'GET':
+                return requests.get(url, headers=headers, timeout=ros_timeout, verify=ros_verify_ssl)
+            elif method == 'POST':
+                return requests.post(url, headers=headers, json=data, timeout=ros_timeout, verify=ros_verify_ssl)
+            elif method == 'DELETE':
+                return requests.delete(url, headers=headers, timeout=ros_timeout, verify=ros_verify_ssl)
+        except Exception as e:
+            err_msg = str(e)
+            if "SSL" in err_msg or "import" in err_msg or "module" in err_msg:
+                return curl_request(url, method=method, data=data, headers=headers, timeout=ros_timeout, insecure=(not ros_verify_ssl))
+            raise
+
+    try:
+        from urllib.parse import quote
+        list_query = quote(ros_address_list)
+        res = ros_request(f"/ip/firewall/address-list?list={list_query}", method='GET')
+        
+        if res.status_code != 200:
+            print(f"❌ 获取 RouterOS Address List 失败: HTTP {res.status_code}. 请检查主机IP/端口/凭据是否正确，且 RouterOS 开启了 REST API (www 或 www-ssl 服务)。")
+            return
+            
+        records = res.json()
+        if not isinstance(records, list):
+            if isinstance(records, dict) and records:
+                records = [records]
+            else:
+                records = []
+                
+        # 删除带有特定注释的旧记录
+        deleted_count = 0
+        for record in records:
+            r_list = record.get("list")
+            r_comment = record.get("comment")
+            r_id = record.get(".id")
+            
+            if r_list == ros_address_list and r_comment == ros_comment and r_id:
+                del_res = ros_request(f"/ip/firewall/address-list/{r_id}", method='DELETE')
+                if del_res.status_code in [200, 204]:
+                    deleted_count += 1
+                else:
+                    print(f"   ⚠️ 删除旧记录 {record.get('address')} 失败: HTTP {del_res.status_code}")
+                    
+        if deleted_count > 0:
+            print(f"   🗑️ 已成功清理 {deleted_count} 个旧优选 IP 记录")
+            
+        # 添加新的优选 IP
+        added_count = 0
+        for ip in best_ips:
+            payload = {
+                "list": ros_address_list,
+                "address": ip,
+                "comment": ros_comment
+            }
+            add_res = ros_request("/ip/firewall/address-list", method='POST', data=payload)
+            if add_res.status_code in [200, 201]:
+                added_count += 1
+                print(f"   ✅ 已成功添加 IP: {ip}")
+            else:
+                print(f"   ❌ 添加 IP {ip} 失败: HTTP {add_res.status_code}. 错误: {add_res.text if hasattr(add_res, 'text') else ''}")
+                
+        print(f"   🎉 ROS 更新完毕：成功更新了 {added_count}/{len(best_ips)} 个 IP 到 addresslist '{ros_address_list}'")
+        
+    except Exception as e:
+        print(f"❌ RouterOS API 交互过程中发生异常: {e}")
+
+
+def update_xray_config(ips, config):
+    """自动将前两个优选 IP 更新到 Xray 配置文件的 "argo" 和 "argo2" 标签节点中"""
+    xray_enabled = config.get("xray_enabled", False)
+    if not xray_enabled:
+        return
+        
+    xray_config_path = config.get("xray_config_path")
+    if not xray_config_path:
+        print("❌ Xray 自动更新失败: 缺少必要配置 xray_config_path")
+        return
+        
+    if len(ips) < 1:
+        print("⚠️ 没有可用的优选 IP 用于更新 Xray 配置")
+        return
+        
+    # 获取前两个 IP
+    ip1 = ips[0]
+    ip2 = ips[1] if len(ips) > 1 else ips[0]
+    
+    print(f"\n📡 正在自动更新 Xray 配置文件: {xray_config_path}")
+    print(f"   准备更新节点:")
+    print(f"   - tag 'argo'  => {ip1}")
+    if len(ips) > 1:
+        print(f"   - tag 'argo2' => {ip2}")
+        
+    if not os.path.exists(xray_config_path):
+        print(f"❌ Xray 配置文件未找到: {xray_config_path}")
+        return
+        
+    try:
+        # 读取 Xray 配置
+        with open(xray_config_path, 'r', encoding='utf-8') as f:
+            xray_data = json.load(f)
+            
+        updated_tags = []
+        outbounds = xray_data.get("outbounds", [])
+        if not isinstance(outbounds, list):
+            print("❌ Xray 配置文件格式错误: 'outbounds' 不是列表")
+            return
+            
+        for outbound in outbounds:
+            if not isinstance(outbound, dict):
+                continue
+            tag = outbound.get("tag")
+            if tag in ["argo", "argo2"]:
+                target_ip = ip1 if tag == "argo" else ip2
+                settings = outbound.get("settings", {})
+                if not isinstance(settings, dict):
+                    continue
+                
+                replaced = False
+                # 1. VMess/VLESS 类的 vnext 结构
+                vnext = settings.get("vnext")
+                if isinstance(vnext, list) and len(vnext) > 0 and isinstance(vnext[0], dict):
+                    vnext[0]["address"] = target_ip
+                    replaced = True
+                
+                # 2. Shadowsocks/Trojan 类的 servers 结构
+                servers = settings.get("servers")
+                if isinstance(servers, list) and len(servers) > 0 and isinstance(servers[0], dict):
+                    servers[0]["address"] = target_ip
+                    replaced = True
+                    
+                if replaced:
+                    updated_tags.append(tag)
+                    print(f"   ✅ 已成功更新 tag '{tag}' 的 address 为: {target_ip}")
+                else:
+                    print(f"   ⚠️  未能在 tag '{tag}' 节点的 settings 中找到有效的 'vnext' 或 'servers' 结构来替换 address")
+                    
+        if updated_tags:
+            # 写回配置文件
+            with open(xray_config_path, 'w', encoding='utf-8') as f:
+                json.dump(xray_data, f, ensure_ascii=False, indent=2)
+            print(f"   🎉 Xray 配置更新成功，已写入文件。")
+            
+            # 重启服务（如果配置了命令）
+            restart_cmd = config.get("xray_restart_cmd")
+            if restart_cmd:
+                print(f"   🔄 正在执行 Xray 重启命令: {restart_cmd}")
+                try:
+                    res = subprocess.run(restart_cmd, shell=True, capture_output=True, text=True, timeout=15)
+                    if res.returncode == 0:
+                        print("   ✅ Xray 服务重启成功")
+                    else:
+                        print(f"   ❌ Xray 服务重启失败 (返回码 {res.returncode}): {res.stderr}")
+                except Exception as ex:
+                    print(f"   ❌ 执行 Xray 重启命令失败: {ex}")
+        else:
+            print("   ⚠️  未在 Xray 配置文件中找到标签为 'argo' 或 'argo2' 的节点")
+            
+    except Exception as e:
+        print(f"❌ Xray 配置文件更新失败: {e}")
+
+
+def auto_update_dns_and_ros(result_file="result.csv"):
+    """优选地址完成后，自动执行 Cloudflare DNS、RouterOS 和 Xray 的更新"""
+    # 1. 尝试加载配置
+    config = load_config_extended()
+    if not config:
+        return
+        
+    cf_enabled = config.get("cf_enabled", False)
+    ros_enabled = config.get("ros_enabled", False)
+    xray_enabled = config.get("xray_enabled", False)
+    
+    if not cf_enabled and not ros_enabled and not xray_enabled:
+        return
+        
+    print("\n" + "=" * 70)
+    print(" 🛠️  自动更新服务 (Cloudflare DNS & RouterOS & Xray)")
+    print("=" * 70)
+    
+    # 2. 检查结果文件是否存在
+    if not os.path.exists(result_file):
+        print(f"❌ 未找到测速结果文件: {result_file}，无法进行自动更新")
+        return
+        
+    # 3. 解析结果文件中的 IP 列表
+    ips = []
+    try:
+        with open(result_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                ip = (row.get('IP 地址') or '').strip()
+                if ip:
+                    if ip.startswith('[') and ']' in ip:
+                        parts = ip.split(']')
+                        ip = parts[0][1:]
+                    elif ip.count(':') == 1:
+                        ip = ip.split(':')[0]
+                    ips.append(ip)
+    except Exception as e:
+        print(f"❌ 解析测速结果文件失败: {e}")
+        return
+        
+    if not ips:
+        print("⚠️  测速结果文件中未包含有效的 IP 地址，取消更新")
+        return
+        
+    # 4. 执行更新
+    if cf_enabled:
+        try:
+            update_cloudflare_dns(ips, config)
+        except Exception as e:
+            print(f"❌ 更新 Cloudflare DNS 时发生错误: {e}")
+            
+    if ros_enabled:
+        try:
+            update_routeros_address_list(ips, config)
+        except Exception as e:
+            print(f"❌ 更新 RouterOS 时发生错误: {e}")
+            
+    if xray_enabled:
+        try:
+            update_xray_config(ips, config)
+        except Exception as e:
+            print(f"❌ 更新 Xray 配置时发生错误: {e}")
+            
+    print("=" * 70 + "\n")
 
 
 def upload_results_to_api(result_file="result.csv"):

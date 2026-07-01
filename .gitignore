@@ -1,0 +1,9 @@
+config/config.json
+config/xray.json
+__pycache__/
+*.pyc
+result.csv
+ips_ports.txt
+dist/
+build/
+*.spec

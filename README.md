@@ -27,9 +27,12 @@
 - **反代列表生成** - 自动生成`ips_ports.txt`反代配置
 - **多格式支持** - 兼容各种CSV文件格式
 
-### 结果上报
+### 结果上报与自动同步
 - **Cloudflare Workers API** - 支持上报到Cloudflare Workers API
 - **GitHub仓库上传** - 支持上传到GitHub公开仓库
+- **Cloudflare DNS 自动解析** - 自动更新优选 IP 到 Cloudflare 域名解析，支持多 IP 负载均衡与 IPv4/IPv6 自动识别
+- **RouterOS 防火墙同步** - 自动同步优选 IP 到本地 MikroTik RouterOS (ROS) 路由器的指定 Address List 表中，支持旧记录精准清理
+- **Xray 节点地址同步** - 自动将最优的前两个 IP 地址替换更新到指定的 Xray 配置文件中标签为 `"argo"` 和 `"argo2"` 的节点，并支持执行自定义服务重启命令
 - **批量上传** - 支持批量上传优选IP结果
 - **自动格式化** - 自动格式化IP列表（包含注释）
 
@@ -297,7 +300,7 @@ crontab -l
 - **定时任务持久化**：定时任务自动保存到 `./config/crontab`，容器重启后自动恢复
 - **后台运行**：使用 `-d` 参数后台运行，退出终端不影响容器运行
 - **数据持久化**：结果文件会保存在 `./data` 目录中
-- **配置文件**：配置文件会保存在 `./config` 目录中（包括crontab）
+- **配置文件与自动更新**：配置文件会保存在 `./config` 目录中（包含 crontab 定时任务）。如挂载并配置了 `./config/config.json`，测速完成后会自动执行 Cloudflare DNS 和 RouterOS 防火墙列表同步更新。
 - **网络访问**：容器需要网络访问来下载IP列表和上传结果
 - **时区设置**：默认使用 `Asia/Shanghai` 时区
 - **架构支持**：镜像包含 amd64 和 arm64 版本的 CloudflareST 可执行文件，支持多架构自动选择
@@ -889,17 +892,51 @@ export DEFAULT_IP_COUNT=20
 export DEFAULT_SPEED_LIMIT=50
 ```
 
-### 配置文件
-创建 `config.json` 文件：
+### 配置文件与自动更新服务 (Cloudflare DNS & RouterOS & Xray)
+
+本工具支持在测速优选完成后，自动将最优 IP 更新到 **Cloudflare DNS 域名解析**、**本地 MikroTik RouterOS (ROS) 防火墙 Address List** 以及**本地/远程的 Xray 配置文件**中。
+
+#### 1. 自动更新配置参数
+您可以在 `config/config.json` 或 `.cloudflare_speedtest_config.json` 中配置以下字段启用自动更新服务：
+
 ```json
 {
-  "default_airport": "HKG",
-  "default_ip_count": 20,
-  "default_speed_limit": 50,
-  "default_delay_limit": 200,
-  "default_time_limit": 10
+  "cf_enabled": false,                              // 是否启用 Cloudflare DNS 自动更新
+  "cf_api_token": "YOUR_CLOUDFLARE_API_TOKEN",      // Cloudflare API Token (需具备 DNS 编辑权限)
+  "cf_zone_id": "YOUR_CLOUDFLARE_ZONE_ID",          // 您的域名 Zone ID
+  "cf_domain_name": "cf.yourdomain.com",            // 待更新的解析域名
+  "cf_ttl": 60,                                     // 解析记录的 TTL (秒)
+  "cf_proxied": false,                              // 是否开启 CF 代理 (小黄云)
+  "cf_upload_count": 3,                             // 自动更新最优 IP 的数量 (支持多 IP 轮询)
+
+  "ros_enabled": false,                             // 是否启用 RouterOS 自动更新
+  "ros_host": "192.168.1.1",                        // RouterOS 的 IP 地址
+  "ros_port": 443,                                  // REST API 端口 (根据是否启用 SSL，默认为 443 或 80)
+  "ros_use_ssl": true,                              // 是否使用 HTTPS
+  "ros_verify_ssl": false,                          // 是否校验 SSL 证书 (本地路由推荐设为 false)
+  "ros_username": "admin",                          // 路由器登录用户名
+  "ros_password": "YOUR_ROS_PASSWORD",              // 路由器登录密码
+  "ros_address_list": "cloudflare_ips",             // ROS 防火墙地址列表名称 (Addresslist)
+  "ros_comment": "cf_speedtest",                    // ROS 表项注释 (用于精准清理历史数据)
+  "ros_upload_count": 3,                            // 自动同步的最优 IP 数量
+  "ros_timeout": 10,                                // API 超时时间 (秒)
+
+  "xray_enabled": false,                            // 是否启用 Xray 节点配置自动更新
+  "xray_config_path": "/etc/xray/config.json",      // Xray 配置文件绝对或相对路径
+  "xray_restart_cmd": "systemctl restart xray"      // 更新完成后执行的 Xray 重启命令 (留空则不执行)
 }
 ```
+
+> [!IMPORTANT]
+> - **RouterOS v7 要求**：本功能基于 RouterOS v7 内置的原生 REST API 进行通讯。请确保在 `/ip service` 中开启了对应的 `www` (80端口) 或 `www-ssl` (443端口) 服务，并允许执行此脚本的设备访问该端口。
+> - **Xray 节点配置更新机制**：
+>   - 脚本会读取指定路径下的 Xray JSON 配置文件，自动寻找 `outbounds` 列表中标签 (`tag`) 为 `"argo"` 和 `"argo2"` 的出站节点。
+>   - 识别节点后，将其内部 settings 的首个 `vnext` 地址（适用于 VLESS/VMess 等协议）或 `servers` 地址（适用于 Shadowsocks/Trojan 等协议）替换为最优的前两个优选 IP。
+>   - 成功写回配置文件后，若配置了 `xray_restart_cmd` 重启命令且非空，则会通过系统 Shell 自动执行该命令以应用配置并重启服务。
+> - **安全与旧记录清理**：
+>   - 在更新 Cloudflare DNS 时，脚本会先自动清理该域名下已有的旧 A/AAAA 解析，再重新写入最新的优选 IP，以防累积垃圾解析。
+>   - 在更新 RouterOS Address List 时，脚本会**仅清理**注释为 `ros_comment` (默认为 `cf_speedtest`) 且同名地址列表的记录，不会干扰您手工添加的其他记录。
+
 
 ## 开发说明
 
