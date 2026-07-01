@@ -19,7 +19,7 @@ from datetime import datetime
 
 
 # 使用curl的备用HTTP请求函数（解决SSL模块不可用的问题）
-def curl_request(url, method='GET', data=None, headers=None, timeout=30, insecure=False):
+def curl_request(url, method='GET', data=None, headers=None, timeout=30, insecure=False, proxy=None):
     """
     使用curl命令进行HTTP请求（当requests的SSL模块不可用时使用）
     
@@ -30,6 +30,7 @@ def curl_request(url, method='GET', data=None, headers=None, timeout=30, insecur
         headers: 请求头字典
         timeout: 超时时间（秒）
         insecure: 是否忽略SSL证书验证错误（对本地RouterOS自签名证书非常有用）
+        proxy: 代理服务器URL（如 http://127.0.0.1:7890）
     
     Returns:
         dict: 包含status_code、json、text等属性的响应对象模拟
@@ -37,6 +38,9 @@ def curl_request(url, method='GET', data=None, headers=None, timeout=30, insecur
     cmd = ['curl', '-s', '-w', '\\n%{http_code}', '-X', method, '--connect-timeout', str(timeout)]
     if insecure:
         cmd.append('--insecure')
+        
+    if proxy:
+        cmd.extend(['--proxy', proxy])
     
     # 添加请求头
     if headers:
@@ -2817,7 +2821,12 @@ def update_cloudflare_dns(ips, config):
         print("⚠️ 没有可用的优选 IP 用于更新 Cloudflare DNS")
         return
         
+    cf_proxy = config.get("cf_proxy")
+    proxies = {"http": cf_proxy, "https": cf_proxy} if cf_proxy else None
+    
     print(f"\n🌐 正在自动更新 Cloudflare DNS 域名: {domain_name}")
+    if cf_proxy:
+        print(f"   已启用代理更新: {cf_proxy}")
     print(f"   准备更新的前 {len(best_ips)} 个 IP: {', '.join(best_ips)}")
     
     headers = {
@@ -2827,43 +2836,45 @@ def update_cloudflare_dns(ips, config):
     
     # 统一请求包装函数，带 curl 自动回退与详细日志输出
     def cf_request(url, method='GET', data=None):
-        masked_headers = headers.copy()
-        if "Authorization" in masked_headers:
-            token = masked_headers["Authorization"]
-            if len(token) > 15:
-                masked_headers["Authorization"] = f"{token[:15]}...[MASKED]"
-            else:
-                masked_headers["Authorization"] = "[MASKED]"
-        print(f"   [API Request] {method} {url}")
-        print(f"   [API Headers] {json.dumps(masked_headers)}")
-        if data:
-            print(f"   [API Payload] {json.dumps(data)}")
-            
         try:
             if method == 'GET':
-                res = requests.get(url, headers=headers, timeout=15)
+                res = requests.get(url, headers=headers, timeout=15, proxies=proxies)
             elif method == 'POST':
-                res = requests.post(url, headers=headers, json=data, timeout=15)
+                res = requests.post(url, headers=headers, json=data, timeout=15, proxies=proxies)
             elif method == 'DELETE':
-                res = requests.delete(url, headers=headers, timeout=15)
+                res = requests.delete(url, headers=headers, timeout=15, proxies=proxies)
         except Exception as e:
             err_msg = str(e)
             if "SSL" in err_msg or "import" in err_msg or "module" in err_msg:
-                print("   [API Warning] requests SSL/import 失败，正在尝试使用 curl 回退...")
-                res = curl_request(url, method=method, data=data, headers=headers, timeout=15)
+                res = curl_request(url, method=method, data=data, headers=headers, timeout=15, proxy=cf_proxy)
             else:
                 raise
                 
-        body_text = ""
-        if hasattr(res, "text"):
-            body_text = res.text
-        elif hasattr(res, "json"):
-            try:
-                body_text = json.dumps(res.json())
-            except:
-                pass
-        print(f"   [API Response] HTTP {res.status_code}")
-        print(f"   [API Response Body] {body_text}")
+        # 仅在请求失败（状态码非 2xx）时输出详细请求/响应日志以供调试
+        if not (200 <= res.status_code < 300):
+            masked_headers = headers.copy()
+            if "Authorization" in masked_headers:
+                token = masked_headers["Authorization"]
+                if len(token) > 15:
+                    masked_headers["Authorization"] = f"{token[:15]}...[MASKED]"
+                else:
+                    masked_headers["Authorization"] = "[MASKED]"
+            print(f"   [API Request] {method} {url}")
+            print(f"   [API Headers] {json.dumps(masked_headers)}")
+            if data:
+                print(f"   [API Payload] {json.dumps(data)}")
+                
+            body_text = ""
+            if hasattr(res, "text"):
+                body_text = res.text
+            elif hasattr(res, "json"):
+                try:
+                    body_text = json.dumps(res.json())
+                except:
+                    pass
+            print(f"   [API Response] HTTP {res.status_code}")
+            print(f"   [API Response Body] {body_text}")
+            
         return res
 
     try:
@@ -2974,14 +2985,6 @@ def update_routeros_address_list(ips, config):
     # 统一请求包装函数，带 curl 自动回退与详细日志输出
     def ros_request(endpoint, method='GET', data=None):
         url = f"{base_url}{endpoint}"
-        masked_headers = headers.copy()
-        if "Authorization" in masked_headers:
-            masked_headers["Authorization"] = "Basic [MASKED]"
-        print(f"   [ROS Request] {method} {url}")
-        print(f"   [ROS Headers] {json.dumps(masked_headers)}")
-        if data:
-            print(f"   [ROS Payload] {json.dumps(data)}")
-            
         try:
             if method == 'GET':
                 res = requests.get(url, headers=headers, timeout=ros_timeout, verify=ros_verify_ssl)
@@ -2994,21 +2997,31 @@ def update_routeros_address_list(ips, config):
         except Exception as e:
             err_msg = str(e)
             if "SSL" in err_msg or "import" in err_msg or "module" in err_msg:
-                print("   [ROS Warning] requests SSL/import 失败，正在尝试使用 curl 回退...")
                 res = curl_request(url, method=method, data=data, headers=headers, timeout=ros_timeout, insecure=(not ros_verify_ssl))
             else:
                 raise
                 
-        body_text = ""
-        if hasattr(res, "text"):
-            body_text = res.text
-        elif hasattr(res, "json"):
-            try:
-                body_text = json.dumps(res.json())
-            except:
-                pass
-        print(f"   [ROS Response] HTTP {res.status_code}")
-        print(f"   [ROS Response Body] {body_text}")
+        # 仅在请求失败（状态码非 2xx）时输出详细请求/响应日志以供调试
+        if not (200 <= res.status_code < 300):
+            masked_headers = headers.copy()
+            if "Authorization" in masked_headers:
+                masked_headers["Authorization"] = "Basic [MASKED]"
+            print(f"   [ROS Request] {method} {url}")
+            print(f"   [ROS Headers] {json.dumps(masked_headers)}")
+            if data:
+                print(f"   [ROS Payload] {json.dumps(data)}")
+                
+            body_text = ""
+            if hasattr(res, "text"):
+                body_text = res.text
+            elif hasattr(res, "json"):
+                try:
+                    body_text = json.dumps(res.json())
+                except:
+                    pass
+            print(f"   [ROS Response] HTTP {res.status_code}")
+            print(f"   [ROS Response Body] {body_text}")
+            
         return res
 
     try:
@@ -3066,7 +3079,7 @@ def update_routeros_address_list(ips, config):
 
 
 def update_xray_config(ips, config):
-    """自动将前两个优选 IP 更新到 Xray 配置文件的 "argo" 和 "argo2" 标签节点中"""
+    """自动将优选 IP 更新到 Xray 配置文件的指定标签节点中"""
     xray_enabled = config.get("xray_enabled", False)
     if not xray_enabled:
         return
@@ -3080,15 +3093,21 @@ def update_xray_config(ips, config):
         print("⚠️ 没有可用的优选 IP 用于更新 Xray 配置")
         return
         
-    # 获取前两个 IP
-    ip1 = ips[0]
-    ip2 = ips[1] if len(ips) > 1 else ips[0]
-    
+    # 获取可配置标签列表，默认为 ["argo", "argo2"]
+    xray_tags = config.get("xray_tags")
+    if not isinstance(xray_tags, list) or not xray_tags:
+        xray_tags = ["argo", "argo2"]
+        
     print(f"\n📡 正在自动更新 Xray 配置文件: {xray_config_path}")
     print(f"   准备更新节点:")
-    print(f"   - tag 'argo'  => {ip1}")
-    if len(ips) > 1:
-        print(f"   - tag 'argo2' => {ip2}")
+    
+    # 建立 tag 到 IP 的映射关系
+    tag_to_ip = {}
+    for idx, tag in enumerate(xray_tags):
+        # 对应第 idx 个优选 IP，若优选 IP 不足，则使用最后一个 IP
+        target_ip = ips[idx] if idx < len(ips) else ips[-1]
+        tag_to_ip[tag] = target_ip
+        print(f"   - tag '{tag}' => {target_ip}")
         
     if not os.path.exists(xray_config_path):
         print(f"❌ Xray 配置文件未找到: {xray_config_path}")
@@ -3109,8 +3128,8 @@ def update_xray_config(ips, config):
             if not isinstance(outbound, dict):
                 continue
             tag = outbound.get("tag")
-            if tag in ["argo", "argo2"]:
-                target_ip = ip1 if tag == "argo" else ip2
+            if tag in tag_to_ip:
+                target_ip = tag_to_ip[tag]
                 settings = outbound.get("settings", {})
                 if not isinstance(settings, dict):
                     continue

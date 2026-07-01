@@ -918,6 +918,7 @@ export DEFAULT_SPEED_LIMIT=50
   "cf_ttl": 60,                                     // 解析记录的 TTL (秒)
   "cf_proxied": false,                              // 是否开启 CF 代理 (小黄云)
   "cf_upload_count": 3,                             // 自动更新最优 IP 的数量 (支持多 IP 轮询)
+  "cf_proxy": "",                                   // 更新 CF DNS 时使用的代理服务器 (如 "http://127.0.0.1:7890"，留空则不使用)
 
   "ros_enabled": false,                             // 是否启用 RouterOS 自动更新
   "ros_host": "192.168.1.1",                        // RouterOS 的 IP 地址
@@ -933,16 +934,21 @@ export DEFAULT_SPEED_LIMIT=50
 
   "xray_enabled": false,                            // 是否启用 Xray 节点配置自动更新
   "xray_config_path": "/etc/xray/config.json",      // Xray 配置文件绝对或相对路径
-  "xray_restart_cmd": "systemctl restart xray"      // 更新完成后执行的 Xray 重启命令 (留空则不执行)
+  "xray_restart_cmd": "systemctl restart xray",      // 更新完成后执行的 Xray 重启命令 (留空则不执行)
+  "xray_tags": ["argo", "argo2"]                    // 需要更新的 Xray 节点 tag 列表 (支持配置多个)
 }
 ```
 
 > [!IMPORTANT]
 > - **RouterOS v7 要求**：本功能基于 RouterOS v7 内置的原生 REST API 进行通讯。请确保在 `/ip service` 中开启了对应的 `www` (80端口) 或 `www-ssl` (443端口) 服务，并允许执行此脚本的设备访问该端口。
 > - **Xray 节点配置更新机制**：
->   - 脚本会读取指定路径下的 Xray JSON 配置文件，自动寻找 `outbounds` 列表中标签 (`tag`) 为 `"argo"` 和 `"argo2"` 的出站节点。
->   - 识别节点后，将其内部 settings 的首个 `vnext` 地址（适用于 VLESS/VMess 等协议）或 `servers` 地址（适用于 Shadowsocks/Trojan 等协议）替换为最优的前两个优选 IP。
->   - 成功写回配置文件后，若配置了 `xray_restart_cmd` 重启命令且非空，则会通过系统 Shell 自动执行该命令以应用配置并重启服务。
+>   - 脚本会读取指定路径下的 Xray JSON 配置文件，自动匹配 `outbounds` 列表中由 `xray_tags` 参数指定的所有标签（默认为 `["argo", "argo2"]`）。
+>   - 依次将优选 IP 分配给对应的标签。若配置的标签数量多于实际获取的优选 IP，则超出部分自动复用最后一个可用 IP。
+>   - 支持更新 VLESS/VMess（`vnext` 结构）以及 Shadowsocks/Trojan（`servers` 结构）类型出站节点的 `address` 地址。
+>   - 成功写回配置文件后，若配置了 `xray_restart_cmd` 重启命令且非空，则会通过系统 Shell 自动执行该命令以重启服务。
+> - **Cloudflare 代理与日志收敛**：
+>   - 如果在中国大陆等网络受限环境运行，可配置 `cf_proxy` 参数（支持 HTTP/HTTPS 代理）代理 Cloudflare API 请求（同时支持 `requests` 库和 `curl` 工具）。
+>   - 常规运行状态下，对 Cloudflare 与 RouterOS 的 API 网络操作日志已实现收敛：**成功时不输出底层调试日志，只有当请求失败时（HTTP 状态码非 2xx），才会自动打印完整的请求和响应 Body 详情**，实现极简干净的日志输出。
 > - **安全与旧记录清理**：
 >   - 在更新 Cloudflare DNS 时，脚本会先自动清理该域名下已有的旧 A/AAAA 解析，再重新写入最新的优选 IP，以防累积垃圾解析。
 >   - 在更新 RouterOS Address List 时，脚本会**仅清理**注释为 `ros_comment` (默认为 `cf_speedtest`) 且同名地址列表的记录，不会干扰您手工添加的其他记录。
