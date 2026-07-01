@@ -965,6 +965,42 @@ export DEFAULT_SPEED_LIMIT=50
    - **Allowed Address 限制**：如果在 `/ip service` 的 `www` 或 `www-ssl` 服务中设置了 `address` 限制，请务必将运行本脚本的设备 IP（或其网段）加入允许列表中。
    - **Input 防火墙规则**：如果配置了严格的本地入站（Input）防火墙过滤规则，请确保放行该测速设备访问 ROS 的 80/443（或自定义）端口。
 
+#### 3. Docker 容器中运行时的 Xray 对接方案
+如果本测速工具运行在 Docker 容器内，而 Xray 服务运行在宿主机（或另一个容器）中，您可以通过以下方式解决 **修改配置文件** 和 **重启 Xray 服务** 的问题：
+
+##### 方案一：挂载配置文件 + 宿主机文件监听重启（推荐：最安全）
+1. **修改配置文件**：将宿主机的 Xray 配置文件挂载到测速容器内：
+   - 挂载参数：`-v /etc/xray/config.json:/app/xray/config.json`
+   - `config.json` 设置：`"xray_config_path": "/app/xray/config.json"`
+2. **重启服务**：在**宿主机**上运行一个简单的文件监听脚本（如使用 `inotify-tools`），当检测到配置文件被修改时，自动重启宿主机上的 Xray 服务。
+   宿主机运行命令示例：
+   ```bash
+   # 安装 inotify-tools
+   sudo apt-get install inotify-tools
+   
+   # 监听并自动重启（可放入后台运行或写成 systemd 服务）
+   while inotifywait -e modify /etc/xray/config.json; do
+       systemctl restart xray
+   done
+   ```
+   *此方案下，测速工具容器内的 `"xray_restart_cmd"` 保持留空即可。*
+
+##### 方案二：挂载配置文件 + 挂载 Docker Socket（适用于 Xray 同样运行在容器中）
+如果您的 Xray 同样运行在 Docker 容器中（容器名假设为 `xray`）：
+1. **修改配置文件**：将 Xray 配置文件在宿主机上的实际路径，同时挂载到测速容器与 Xray 容器中共享。
+2. **重启服务**：通过将宿主机的 Docker 套接字挂载进本测速容器，直接在容器内调用宿主机 Docker daemon API 重启 Xray 容器。
+   - 挂载参数：`-v /var/run/docker.sock:/var/run/docker.sock`
+   - `config.json` 设置：`"xray_restart_cmd": "curl --unix-socket /var/run/docker.sock -X POST http://localhost/containers/xray/restart"`
+   *(注：使用 curl 直接调用 Docker API 重启指定容器，无需在测速容器内安装完整的 docker cli。其中 `xray` 是您的 Xray 容器名称)*
+
+##### 方案三：通过 SSH 远程执行重启命令
+如果宿主机开启了 SSH 服务：
+1. **修改配置文件**：使用方案一的挂载方式。
+2. **重启服务**：将容器的 SSH 密钥配置为免密登录宿主机，通过 SSH 执行重启命令。
+   - `config.json` 设置：`"xray_restart_cmd": "ssh user@172.17.0.1 'systemctl restart xray'"`
+   *(注：`172.17.0.1` 通常为容器内访问宿主机的默认网关 IP)*
+
+
 
 
 ## 开发说明
