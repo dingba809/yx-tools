@@ -937,6 +937,35 @@ export DEFAULT_SPEED_LIMIT=50
 >   - 在更新 Cloudflare DNS 时，脚本会先自动清理该域名下已有的旧 A/AAAA 解析，再重新写入最新的优选 IP，以防累积垃圾解析。
 >   - 在更新 RouterOS Address List 时，脚本会**仅清理**注释为 `ros_comment` (默认为 `cf_speedtest`) 且同名地址列表的记录，不会干扰您手工添加的其他记录。
 
+#### 2. RouterOS (ROS) 端配置指南
+为使本脚本能正常与您的 MikroTik 路由器通信并更新 Address List，请确保 ROS 端已完成以下配置：
+
+1. **启用 REST API 服务 (www 或 www-ssl)**
+   在 ROS 命令行终端执行以下命令启用 HTTP/HTTPS 服务（REST API）：
+   ```routeros
+   # 启用 HTTP REST API 服务（默认端口 80）
+   /ip service enable www
+   
+   # （推荐）启用安全 HTTPS REST API 服务（默认端口 443，需提前配置并信任证书）
+   /ip service enable www-ssl
+   ```
+   *注：如果修改过服务默认端口，请在配置文件的 `ros_port` 中同步修改。*
+
+2. **创建具备 API 修改权限的用户 (推荐)**
+   为了路由安全，建议专门为本测速更新脚本创建一个独立的用户组与账号，仅赋予 `read`, `write`, `api` 权限：
+   ```routeros
+   # 1. 创建专用用户组
+   /user group add name=api-updater policy=read,write,api
+   
+   # 2. 创建专用用户（请将 "updater_user" 和 "your_password" 替换为您的账号与密码）
+   /user add name=updater_user group=api-updater password=your_password comment="Cloudflare Speedtest Updater"
+   ```
+
+3. **防火墙与安全控制**
+   - **Allowed Address 限制**：如果在 `/ip service` 的 `www` 或 `www-ssl` 服务中设置了 `address` 限制，请务必将运行本脚本的设备 IP（或其网段）加入允许列表中。
+   - **Input 防火墙规则**：如果配置了严格的本地入站（Input）防火墙过滤规则，请确保放行该测速设备访问 ROS 的 80/443（或自定义）端口。
+
+
 
 ## 开发说明
 
