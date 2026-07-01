@@ -906,6 +906,7 @@ def get_user_input(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
     print("  1. 小白快速测试 - 简单输入，适合新手")
     print("  2. 常规测速 - 测试指定机场码的IP速度")
     print("  3. 优选反代 - 从CSV文件生成反代IP列表")
+    print("  4. 仅更新配置 - 跳过测速，直接使用已有的 CSV 结果更新 Cloudflare/ROS/Xray")
     print("=" * 60)
     
     choice = input("\n请选择功能 [默认: 1]: ").strip()
@@ -918,6 +919,17 @@ def get_user_input(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
     elif choice == "3":
         # 优选反代模式
         return handle_proxy_mode()
+    elif choice == "4":
+        # 仅更新配置模式
+        print("\n[仅更新配置模式]")
+        csv_file = input("请输入已有的测速结果 CSV 文件路径 [默认: result.csv]: ").strip()
+        if not csv_file:
+            csv_file = "result.csv"
+        if not os.path.exists(csv_file):
+            print(f"❌ 未找到文件: {csv_file}")
+        else:
+            auto_update_dns_and_ros(csv_file)
+        return None, None, None, None
     else:
         # 常规测速模式
         return handle_normal_mode(ip_file, ip_version)
@@ -1733,9 +1745,13 @@ def parse_args():
         """
     )
     
-    # 模式选择（必需参数）
-    parser.add_argument('--mode', choices=['beginner', 'normal', 'proxy'], required=True,
+    # 模式选择
+    parser.add_argument('--mode', choices=['beginner', 'normal', 'proxy'],
                        help='运行模式: beginner(小白快速测试), normal(常规测速), proxy(优选反代)')
+    
+    # 跳过测速直接更新配置参数
+    parser.add_argument('--skip-speedtest', action='store_true',
+                       help='跳过测速，直接使用已有的 CSV 结果运行 DNS、RouterOS 和 Xray 自动更新')
     
     # IP版本
     parser.add_argument('--ipv6', action='store_true',
@@ -1783,7 +1799,10 @@ def parse_args():
     parser.add_argument('--clear', action='store_true',
                        help='上传前清空现有IP（避免IP累积，推荐使用）')
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.skip_speedtest and not args.mode:
+        parser.error("缺少必需参数: 必须指定 --mode 开始测速，或者指定 --skip-speedtest 直接更新配置")
+    return args
 
 
 def run_with_args(args):
@@ -1801,6 +1820,14 @@ def run_with_args(args):
     print(" Cloudflare SpeedTest 跨平台自动化脚本（命令行模式）")
     print("=" * 80)
     
+    # 检查是否跳过测速直接更新
+    if args.skip_speedtest:
+        print("\n[跳过测速直接更新]")
+        csv_file = args.csv if args.csv else "result.csv"
+        print(f"使用结果文件: {csv_file}")
+        auto_update_dns_and_ros(csv_file)
+        return 0
+        
     # 获取系统信息
     os_type, arch_type = get_system_info()
     print(f"\n[系统信息]")
@@ -2783,20 +2810,46 @@ def update_cloudflare_dns(ips, config):
         "Content-Type": "application/json"
     }
     
-    # 统一请求包装函数，带 curl 自动回退
+    # 统一请求包装函数，带 curl 自动回退与详细日志输出
     def cf_request(url, method='GET', data=None):
+        masked_headers = headers.copy()
+        if "Authorization" in masked_headers:
+            token = masked_headers["Authorization"]
+            if len(token) > 15:
+                masked_headers["Authorization"] = f"{token[:15]}...[MASKED]"
+            else:
+                masked_headers["Authorization"] = "[MASKED]"
+        print(f"   [API Request] {method} {url}")
+        print(f"   [API Headers] {json.dumps(masked_headers)}")
+        if data:
+            print(f"   [API Payload] {json.dumps(data)}")
+            
         try:
             if method == 'GET':
-                return requests.get(url, headers=headers, timeout=15)
+                res = requests.get(url, headers=headers, timeout=15)
             elif method == 'POST':
-                return requests.post(url, headers=headers, json=data, timeout=15)
+                res = requests.post(url, headers=headers, json=data, timeout=15)
             elif method == 'DELETE':
-                return requests.delete(url, headers=headers, timeout=15)
+                res = requests.delete(url, headers=headers, timeout=15)
         except Exception as e:
             err_msg = str(e)
             if "SSL" in err_msg or "import" in err_msg or "module" in err_msg:
-                return curl_request(url, method=method, data=data, headers=headers, timeout=15)
-            raise
+                print("   [API Warning] requests SSL/import 失败，正在尝试使用 curl 回退...")
+                res = curl_request(url, method=method, data=data, headers=headers, timeout=15)
+            else:
+                raise
+                
+        body_text = ""
+        if hasattr(res, "text"):
+            body_text = res.text
+        elif hasattr(res, "json"):
+            try:
+                body_text = json.dumps(res.json())
+            except:
+                pass
+        print(f"   [API Response] HTTP {res.status_code}")
+        print(f"   [API Response Body] {body_text}")
+        return res
 
     try:
         from urllib.parse import quote
@@ -2903,21 +2956,43 @@ def update_routeros_address_list(ips, config):
         except:
             pass
 
-    # 统一请求包装函数，带 curl 自动回退
+    # 统一请求包装函数，带 curl 自动回退与详细日志输出
     def ros_request(endpoint, method='GET', data=None):
         url = f"{base_url}{endpoint}"
+        masked_headers = headers.copy()
+        if "Authorization" in masked_headers:
+            masked_headers["Authorization"] = "Basic [MASKED]"
+        print(f"   [ROS Request] {method} {url}")
+        print(f"   [ROS Headers] {json.dumps(masked_headers)}")
+        if data:
+            print(f"   [ROS Payload] {json.dumps(data)}")
+            
         try:
             if method == 'GET':
-                return requests.get(url, headers=headers, timeout=ros_timeout, verify=ros_verify_ssl)
+                res = requests.get(url, headers=headers, timeout=ros_timeout, verify=ros_verify_ssl)
             elif method == 'POST':
-                return requests.post(url, headers=headers, json=data, timeout=ros_timeout, verify=ros_verify_ssl)
+                res = requests.post(url, headers=headers, json=data, timeout=ros_timeout, verify=ros_verify_ssl)
             elif method == 'DELETE':
-                return requests.delete(url, headers=headers, timeout=ros_timeout, verify=ros_verify_ssl)
+                res = requests.delete(url, headers=headers, timeout=ros_timeout, verify=ros_verify_ssl)
         except Exception as e:
             err_msg = str(e)
             if "SSL" in err_msg or "import" in err_msg or "module" in err_msg:
-                return curl_request(url, method=method, data=data, headers=headers, timeout=ros_timeout, insecure=(not ros_verify_ssl))
-            raise
+                print("   [ROS Warning] requests SSL/import 失败，正在尝试使用 curl 回退...")
+                res = curl_request(url, method=method, data=data, headers=headers, timeout=ros_timeout, insecure=(not ros_verify_ssl))
+            else:
+                raise
+                
+        body_text = ""
+        if hasattr(res, "text"):
+            body_text = res.text
+        elif hasattr(res, "json"):
+            try:
+                body_text = json.dumps(res.json())
+            except:
+                pass
+        print(f"   [ROS Response] HTTP {res.status_code}")
+        print(f"   [ROS Response Body] {body_text}")
+        return res
 
     try:
         from urllib.parse import quote

@@ -522,13 +522,14 @@ python3 cloudflare_speedtest.py --mode proxy --csv /path/to/result.csv
 
 | 参数 | 说明 | 默认值 | 必需 | 示例 |
 |------|------|--------|------|------|
-| `--mode` | 运行模式 | - | ✅ | `beginner`/`normal`/`proxy` |
+| `--mode` | 运行模式 | - | ⚠️ | `beginner`/`normal`/`proxy`（在非 --skip-speedtest 时为必需） |
+| `--skip-speedtest` | 跳过测速直接运行配置更新 | false | ❌ | `--skip-speedtest` |
 | `--ipv6` | 使用IPv6（默认IPv4） | IPv4 | ❌ | `--ipv6` |
 | `--count` | 测试IP数量 | 10 | ❌ | `--count 20` |
 | `--speed` | 下载速度下限 (MB/s) | 1.0 | ❌ | `--speed 2` |
 | `--delay` | 延迟上限 (ms) | 1000 | ❌ | `--delay 500` |
 | `--region` | 地区码（常规测速模式需要） | - | ⚠️ | `--region HKG` |
-| `--csv` | CSV文件路径（优选反代模式） | result.csv | ❌ | `--csv result.csv` |
+| `--csv` | CSV文件路径（优选反代或跳过测速直接更新时使用） | result.csv | ❌ | `--csv result.csv` |
 | `--upload` | 上传方式 | none | ❌ | `api`/`github`/`none` |
 | `--worker-domain` | Worker域名（API上传需要） | - | ⚠️ | `--worker-domain example.com` |
 | `--uuid` | UUID或路径（API上传需要） | - | ⚠️ | `--uuid abc123` |
@@ -540,7 +541,7 @@ python3 cloudflare_speedtest.py --mode proxy --csv /path/to/result.csv
 
 **说明：**
 - ✅ 必需参数：必须提供
-- ⚠️ 条件必需：在特定模式下需要
+- ⚠️ 条件必需：在特定模式或未使用特定参数时需要
 - ❌ 可选参数：可以不提供，使用默认值
 
 #### 使用场景示例
@@ -599,6 +600,15 @@ python3 cloudflare_speedtest.py --mode beginner \
 python3 cloudflare_speedtest.py --mode proxy --csv result1.csv
 python3 cloudflare_speedtest.py --mode proxy --csv result2.csv
 python3 cloudflare_speedtest.py --mode proxy --csv result3.csv
+```
+
+**场景6：跳过测速，直接执行 IP 配置更新（使用已有的测速结果）**
+```bash
+# 直接使用当前目录下已有的 result.csv 更新 DNS、ROS 和 Xray
+python3 cloudflare_speedtest.py --skip-speedtest
+
+# 使用自定义路径的 CSV 测速结果更新
+python3 cloudflare_speedtest.py --skip-speedtest --csv /path/to/my_result.csv
 ```
 
 #### 结果上报详细说明
