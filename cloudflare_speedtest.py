@@ -59,11 +59,20 @@ def curl_request(url, method='GET', data=None, headers=None, timeout=30, insecur
         # 分离响应体和状态码
         lines = output.strip().split('\n')
         if len(lines) >= 1:
-            status_code = int(lines[-1])
+            try:
+                status_code = int(lines[-1])
+            except ValueError:
+                status_code = 0
             response_text = '\n'.join(lines[:-1])
         else:
             status_code = 0
             response_text = output
+            
+        # 如果 HTTP 状态码为 0，说明 curl 网络连接失败，提取 stderr 的详细错误信息
+        if status_code == 0:
+            stderr_msg = result.stderr.strip()
+            if stderr_msg:
+                response_text = f"curl connection error: {stderr_msg}"
         
         # 创建响应对象模拟
         class CurlResponse:
