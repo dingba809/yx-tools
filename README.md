@@ -917,7 +917,7 @@ export DEFAULT_SPEED_LIMIT=50
   "cf_domain_name": "cf.yourdomain.com",            // 待更新的解析域名
   "cf_ttl": 60,                                     // 解析记录的 TTL (秒)
   "cf_proxied": false,                              // 是否开启 CF 代理 (小黄云)
-  "cf_upload_count": 3,                             // 自动更新最优 IP 的数量 (支持多 IP 轮询)
+  "cf_upload_count": 4,                             // 自动更新最优 IP 的数量 (支持多 IP 轮询)
   "cf_proxy": "",                                   // 更新 CF DNS 时使用的代理服务器 (支持 http/socks5，如 "http://127.0.0.1:7890" 或 "socks5://127.0.0.1:1080"，留空则不使用)
 
   "ros_enabled": false,                             // 是否启用 RouterOS 自动更新
@@ -929,7 +929,7 @@ export DEFAULT_SPEED_LIMIT=50
   "ros_password": "YOUR_ROS_PASSWORD",              // 路由器登录密码
   "ros_address_list": "cloudflare_ips",             // ROS 防火墙地址列表名称 (Addresslist)
   "ros_comment": "cf_speedtest",                    // ROS 表项注释 (用于精准清理历史数据)
-  "ros_upload_count": 3,                            // 自动同步的最优 IP 数量
+  "ros_upload_count": 4,                            // 自动同步的最优 IP 数量
   "ros_timeout": 10,                                // API 超时时间 (秒)
 
   "xray_enabled": false,                            // 是否启用 Xray 节点配置自动更新

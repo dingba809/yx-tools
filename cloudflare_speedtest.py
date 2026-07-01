@@ -2812,7 +2812,7 @@ def update_cloudflare_dns(ips, config):
         print("❌ Cloudflare DNS 自动更新失败: 缺少必要配置 cf_api_token, cf_zone_id 或 cf_domain_name")
         return
         
-    upload_count = int(config.get("cf_upload_count", 3))
+    upload_count = int(config.get("cf_upload_count", 4))
     ttl = int(config.get("cf_ttl", 60))
     proxied = bool(config.get("cf_proxied", False))
     
@@ -2952,7 +2952,7 @@ def update_routeros_address_list(ips, config):
     default_port = 443 if ros_use_ssl else 80
     ros_port = int(config.get("ros_port", default_port))
     ros_verify_ssl = config.get("ros_verify_ssl", False)
-    ros_upload_count = int(config.get("ros_upload_count", 3))
+    ros_upload_count = int(config.get("ros_upload_count", 4))
     ros_comment = config.get("ros_comment", "cf_speedtest")
     ros_timeout = int(config.get("ros_timeout", 10))
     
