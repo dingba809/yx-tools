@@ -355,6 +355,12 @@ GITHUB_REPO = "XIU2/CloudflareSpeedTest"
 # 配置文件路径
 CONFIG_FILE = ".cloudflare_speedtest_config.json"
 
+# 数据与配置文件路径设置（如果宿主机挂载了 data 目录，则将输出重定向到 data 中）
+DATA_DIR = "data" if os.path.isdir("data") else ""
+RESULT_CSV = os.path.join(DATA_DIR, "result.csv") if DATA_DIR else "result.csv"
+IPS_PORTS_TXT = os.path.join(DATA_DIR, "ips_ports.txt") if DATA_DIR else "ips_ports.txt"
+REGION_SCAN_CSV = os.path.join(DATA_DIR, "region_scan.csv") if DATA_DIR else "region_scan.csv"
+
 # 保存交互模式下生成的命令（用于定时任务）
 LAST_GENERATED_COMMAND = None
 
@@ -922,9 +928,9 @@ def get_user_input(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
     elif choice == "4":
         # 仅更新配置模式
         print("\n[仅更新配置模式]")
-        csv_file = input("请输入已有的测速结果 CSV 文件路径 [默认: result.csv]: ").strip()
+        csv_file = input(f"请输入已有的测速结果 CSV 文件路径 [默认: {RESULT_CSV}]: ").strip()
         if not csv_file:
-            csv_file = "result.csv"
+            csv_file = RESULT_CSV
         if not os.path.exists(csv_file):
             print(f"❌ 未找到文件: {csv_file}")
         else:
@@ -938,16 +944,16 @@ def get_user_input(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
 def select_csv_file():
     """选择CSV文件"""
     while True:
-        csv_file = input("\n请输入CSV文件路径 [默认: result.csv]: ").strip()
+        csv_file = input(f"\n请输入CSV文件路径 [默认: {RESULT_CSV}]: ").strip()
         if not csv_file:
-            csv_file = "result.csv"
+            csv_file = RESULT_CSV
         
         if os.path.exists(csv_file):
             print(f"找到文件: {csv_file}")
             return csv_file
         else:
             print(f"文件不存在: {csv_file}")
-            print("请确保文件路径正确，或先运行常规测速生成result.csv")
+            print(f"请确保文件路径正确，或先运行常规测速生成 {RESULT_CSV}")
             retry = input("是否重新输入？[Y/n]: ").strip().lower()
             if retry in ['n', 'no']:
                 return None
@@ -978,7 +984,7 @@ def handle_proxy_mode():
     
     # 生成反代IP列表
     print(f"\n正在处理CSV文件: {csv_file}")
-    success = generate_proxy_list(csv_file, "ips_ports.txt")
+    success = generate_proxy_list(csv_file, IPS_PORTS_TXT)
     
     if success:
         print("\n" + "=" * 60)
@@ -1129,11 +1135,11 @@ def handle_proxy_mode():
         print("模式: 反代IP列表测速")
         
         # 运行测速
-        result_code = run_speedtest_with_file("ips_ports.txt", dn_count, speed_limit, time_limit, thread_count)
+        result_code = run_speedtest_with_file(IPS_PORTS_TXT, dn_count, speed_limit, time_limit, thread_count)
         
         # 如果测速成功，询问是否上报结果
-        if result_code == 0 and os.path.exists("result.csv"):
-            upload_results_to_api("result.csv")
+        if result_code == 0 and os.path.exists(RESULT_CSV):
+            upload_results_to_api(RESULT_CSV)
         
         return None, None, None, None
     else:
@@ -1273,7 +1279,7 @@ def handle_beginner_mode(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
         "-sl", speed_limit,
         "-tl", time_limit,
         "-url", DEFAULT_SPEEDTEST_URL,
-        "-o", "result.csv"
+        "-o", RESULT_CSV
     ])
     
     print(f"\n运行命令: {' '.join(cmd)}")
@@ -1283,15 +1289,15 @@ def handle_beginner_mode(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
     result = subprocess.run(cmd, encoding='utf-8', errors='replace')
     
     if result.returncode == 0:
-        print("\n✅ 测速完成！结果已保存到 result.csv")
-        print("📊 您可以查看 result.csv 文件来了解详细的测试结果")
+        print(f"\n✅ 测速完成！结果已保存到 {RESULT_CSV}")
+        print(f"📊 您可以查看 {RESULT_CSV} 文件来了解详细的测试结果")
         print("💡 提示：结果文件中的IP按速度从快到慢排序")
         
         # 自动更新 DNS 和 RouterOS Address List
-        auto_update_dns_and_ros("result.csv")
+        auto_update_dns_and_ros(RESULT_CSV)
         
         # 询问是否上报结果
-        upload_info = upload_results_to_api("result.csv")
+        upload_info = upload_results_to_api(RESULT_CSV)
         
         # 输出对应的命令行命令
         print("\n" + "=" * 80)
@@ -1463,12 +1469,12 @@ def handle_normal_mode(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
     print("模式: 常规测速（指定地区）")
     
     # 从地区扫描结果中提取该地区的IP进行测速
-    if os.path.exists("region_scan.csv"):
+    if os.path.exists(REGION_SCAN_CSV):
         print(f"\n正在从扫描结果中提取 {cfcolo} 地区的IP...")
         
         # 读取该地区的IP
         region_ips = []
-        with open("region_scan.csv", 'r', encoding='utf-8') as f:
+        with open(REGION_SCAN_CSV, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 colo = (row.get('地区码') or '').strip()
@@ -1503,7 +1509,7 @@ def handle_normal_mode(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
                 "-sl", speed_limit,
                 "-tl", time_limit,
                 "-url", DEFAULT_SPEEDTEST_URL,
-                "-o", "result.csv"
+                "-o", RESULT_CSV
             ])
             
             print(f"\n运行命令: {' '.join(cmd)}")
@@ -1517,13 +1523,13 @@ def handle_normal_mode(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
                 os.remove(region_ip_file)
             
             if result.returncode == 0:
-                print("\n✅ 测速完成！结果已保存到 result.csv")
+                print(f"\n✅ 测速完成！结果已保存到 {RESULT_CSV}")
                 
                 # 自动更新 DNS 和 RouterOS Address List
-                auto_update_dns_and_ros("result.csv")
+                auto_update_dns_and_ros(RESULT_CSV)
                 
                 # 询问是否上报结果
-                upload_info = upload_results_to_api("result.csv")
+                upload_info = upload_results_to_api(RESULT_CSV)
                 
                 # 输出对应的命令行命令
                 print("\n" + "=" * 80)
@@ -1549,7 +1555,7 @@ def handle_normal_mode(ip_file=CLOUDFLARE_IP_FILE, ip_version="ipv4"):
     return cfcolo, dn_count, speed_limit, time_limit
 
 
-def generate_proxy_list(result_file="result.csv", output_file="ips_ports.txt"):
+def generate_proxy_list(result_file=RESULT_CSV, output_file=IPS_PORTS_TXT):
     """从测速结果生成反代IP列表"""
     if not os.path.exists(result_file):
         print(f"未找到测速结果文件: {result_file}")
@@ -1882,7 +1888,7 @@ def run_with_args(args):
             "-sl", str(args.speed),
             "-tl", str(args.delay),
             "-url", DEFAULT_SPEEDTEST_URL,
-            "-o", "result.csv"
+            "-o", RESULT_CSV
         ])
         
         print(f"\n运行命令: {' '.join(cmd)}")
@@ -1891,10 +1897,10 @@ def run_with_args(args):
         result = subprocess.run(cmd, encoding='utf-8', errors='replace')
         
         if result.returncode == 0:
-            print("\n✅ 测速完成！结果已保存到 result.csv")
+            print(f"\n✅ 测速完成！结果已保存到 {RESULT_CSV}")
             
             # 自动更新 DNS 和 RouterOS Address List
-            auto_update_dns_and_ros("result.csv")
+            auto_update_dns_and_ros(RESULT_CSV)
             
             # 处理上传
             if args.upload == 'api':
@@ -1902,13 +1908,13 @@ def run_with_args(args):
                     print("❌ API上传需要提供 --worker-domain 和 --uuid 参数")
                 else:
                     # 调用命令行模式的上传函数
-                    upload_to_cloudflare_api_cli("result.csv", args.worker_domain, args.uuid, args.upload_count, clear_existing=args.clear)
+                    upload_to_cloudflare_api_cli(RESULT_CSV, args.worker_domain, args.uuid, args.upload_count, clear_existing=args.clear)
             elif args.upload == 'github':
                 if not args.repo or not args.token:
                     print("❌ GitHub上传需要提供 --repo 和 --token 参数")
                 else:
                     # 调用命令行模式的上传函数
-                    upload_to_github_cli("result.csv", args.repo, args.token, args.file_path, args.upload_count)
+                    upload_to_github_cli(RESULT_CSV, args.repo, args.token, args.file_path, args.upload_count)
         else:
             print("\n❌ 测速失败")
             return 1
@@ -1932,14 +1938,14 @@ def run_with_args(args):
             return 1
         
         # 检查是否有地区扫描结果
-        if not os.path.exists("region_scan.csv"):
-            print("⚠️  未找到地区扫描结果文件，建议先运行交互式模式进行地区检测")
+        if not os.path.exists(REGION_SCAN_CSV):
+            print(f"⚠️  未找到地区扫描结果文件 {REGION_SCAN_CSV}，建议先运行交互式模式进行地区检测")
             print("   或者使用小白快速测试模式")
             return 1
         
         # 从地区扫描结果中提取该地区的IP
         region_ips = []
-        with open("region_scan.csv", 'r', encoding='utf-8') as f:
+        with open(REGION_SCAN_CSV, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 colo = (row.get('地区码') or '').strip()
@@ -1973,7 +1979,7 @@ def run_with_args(args):
             "-sl", str(args.speed),
             "-tl", str(args.delay),
             "-url", DEFAULT_SPEEDTEST_URL,
-            "-o", "result.csv"
+            "-o", RESULT_CSV
         ])
         
         print(f"\n运行命令: {' '.join(cmd)}")
@@ -1986,10 +1992,10 @@ def run_with_args(args):
             os.remove(region_ip_file)
         
         if result.returncode == 0:
-            print("\n✅ 测速完成！结果已保存到 result.csv")
+            print(f"\n✅ 测速完成！结果已保存到 {RESULT_CSV}")
             
             # 自动更新 DNS 和 RouterOS Address List
-            auto_update_dns_and_ros("result.csv")
+            auto_update_dns_and_ros(RESULT_CSV)
             
             # 处理上传
             if args.upload == 'api':
@@ -1997,13 +2003,13 @@ def run_with_args(args):
                     print("❌ API上传需要提供 --worker-domain 和 --uuid 参数")
                 else:
                     # 调用命令行模式的上传函数
-                    upload_to_cloudflare_api_cli("result.csv", args.worker_domain, args.uuid, args.upload_count, clear_existing=args.clear)
+                    upload_to_cloudflare_api_cli(RESULT_CSV, args.worker_domain, args.uuid, args.upload_count, clear_existing=args.clear)
             elif args.upload == 'github':
                 if not args.repo or not args.token:
                     print("❌ GitHub上传需要提供 --repo 和 --token 参数")
                 else:
                     # 调用命令行模式的上传函数
-                    upload_to_github_cli("result.csv", args.repo, args.token, args.file_path, args.upload_count)
+                    upload_to_github_cli(RESULT_CSV, args.repo, args.token, args.file_path, args.upload_count)
         else:
             print("\n❌ 测速失败")
             return 1
@@ -2018,10 +2024,10 @@ def run_with_args(args):
             return 1
         
         # 生成反代IP列表
-        success = generate_proxy_list(args.csv, "ips_ports.txt")
+        success = generate_proxy_list(args.csv, IPS_PORTS_TXT)
         if success:
             print("\n✅ 优选反代功能完成！")
-            print("  生成的文件: ips_ports.txt")
+            print(f"  生成的文件: {IPS_PORTS_TXT}")
         else:
             print("\n❌ 优选反代功能失败")
             return 1
@@ -3142,7 +3148,7 @@ def update_xray_config(ips, config):
         print(f"❌ Xray 配置文件更新失败: {e}")
 
 
-def auto_update_dns_and_ros(result_file="result.csv"):
+def auto_update_dns_and_ros(result_file=RESULT_CSV):
     """优选地址完成后，自动执行 Cloudflare DNS、RouterOS 和 Xray 的更新"""
     # 1. 尝试加载配置
     config = load_config_extended()
@@ -3209,7 +3215,7 @@ def auto_update_dns_and_ros(result_file="result.csv"):
     print("=" * 70 + "\n")
 
 
-def upload_results_to_api(result_file="result.csv"):
+def upload_results_to_api(result_file=RESULT_CSV):
     """上报优选结果到 Cloudflare Workers API 或 GitHub
     
     Returns:
@@ -3247,7 +3253,7 @@ def upload_results_to_api(result_file="result.csv"):
             print("✗ 请输入 1 或 2")
 
 
-def upload_to_cloudflare_api(result_file="result.csv"):
+def upload_to_cloudflare_api(result_file=RESULT_CSV):
     """上报优选结果到 Cloudflare Workers API"""
     print("\n" + "=" * 70)
     print(" Cloudflare Workers API 上报")
@@ -3662,7 +3668,7 @@ def upload_to_cloudflare_api(result_file="result.csv"):
         return None
 
 
-def upload_to_github(result_file="result.csv"):
+def upload_to_github(result_file=RESULT_CSV):
     """上传优选结果到 GitHub 公开仓库
     
     Returns:
@@ -4074,7 +4080,7 @@ def upload_to_github(result_file="result.csv"):
         return None
 
 
-def upload_to_cloudflare_api_cli(result_file="result.csv", worker_domain=None, uuid=None, upload_count=10, clear_existing=False):
+def upload_to_cloudflare_api_cli(result_file=RESULT_CSV, worker_domain=None, uuid=None, upload_count=10, clear_existing=False):
     """命令行模式：上报优选结果到 Cloudflare Workers API
     
     Args:
@@ -4334,7 +4340,7 @@ def upload_to_cloudflare_api_cli(result_file="result.csv", worker_domain=None, u
         traceback.print_exc()
 
 
-def upload_to_github_cli(result_file="result.csv", repo_info=None, github_token=None, file_path="cloudflare_ips.txt", upload_count=10):
+def upload_to_github_cli(result_file=RESULT_CSV, repo_info=None, github_token=None, file_path="cloudflare_ips.txt", upload_count=10):
     """命令行模式：上传优选结果到 GitHub 公开仓库"""
     print("\n" + "=" * 70)
     print(" 命令行模式：GitHub 仓库上传")
@@ -4641,8 +4647,8 @@ def upload_to_github_cli(result_file="result.csv", repo_info=None, github_token=
 def detect_available_regions():
     """检测可用地区"""
     # 检查是否已有检测结果文件
-    if os.path.exists("region_scan.csv"):
-        print("发现已有的地区扫描结果文件")
+    if os.path.exists(REGION_SCAN_CSV):
+        print(f"发现已有的地区扫描结果文件: {REGION_SCAN_CSV}")
         choice = input("是否需要重新扫描？[y/N]: ").strip().lower()
         if choice != 'y':
             print("使用已有检测结果...")
@@ -4650,7 +4656,7 @@ def detect_available_regions():
             available_regions = []
             region_counts = {}
             
-            with open("region_scan.csv", 'r', encoding='utf-8') as f:
+            with open(REGION_SCAN_CSV, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     colo = (row.get('地区码') or '').strip()
@@ -4686,7 +4692,7 @@ def detect_available_regions():
         "-f", CLOUDFLARE_IP_FILE,
         "-httping",  # 使用HTTPing模式获取地区码
         "-url", "https://jhb.ovh",
-        "-o", "region_scan.csv"  # 输出到地区扫描文件
+        "-o", REGION_SCAN_CSV  # 输出到地区扫描文件
     ])
     
     try:
@@ -4697,12 +4703,12 @@ def detect_available_regions():
         # 直接运行命令，显示完整输出
         result = subprocess.run(cmd, timeout=120, encoding='utf-8', errors='replace')
         
-        if result.returncode == 0 and os.path.exists("region_scan.csv"):
+        if result.returncode == 0 and os.path.exists(REGION_SCAN_CSV):
             # 读取检测结果
             available_regions = []
             region_counts = {}  # 统计每个地区的IP数量
             
-            with open("region_scan.csv", 'r', encoding='utf-8') as f:
+            with open(REGION_SCAN_CSV, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     colo = (row.get('地区码') or '').strip()
@@ -4723,7 +4729,7 @@ def detect_available_regions():
                 available_regions.append((colo, region_name, count))
             
             # 保留地区扫描结果文件，不删除
-            print("地区扫描结果已保存到 region_scan.csv")
+            print(f"地区扫描结果已保存到 {REGION_SCAN_CSV}")
             
             return available_regions
         else:
