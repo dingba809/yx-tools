@@ -2845,7 +2845,9 @@ def update_cloudflare_dns(ips, config):
                 res = requests.delete(url, headers=headers, timeout=15, proxies=proxies)
         except Exception as e:
             err_msg = str(e)
-            if "SSL" in err_msg or "import" in err_msg or "module" in err_msg:
+            if "SSL" in err_msg or "import" in err_msg or "module" in err_msg or "socks" in err_msg.lower() or "dependencies" in err_msg.lower():
+                if "socks" in err_msg.lower() or "dependencies" in err_msg.lower():
+                    print("   [API Warning] Python 环境缺少 SOCKS 代理依赖，已自动回退到 curl 执行代理请求...")
                 res = curl_request(url, method=method, data=data, headers=headers, timeout=15, proxy=cf_proxy)
             else:
                 raise

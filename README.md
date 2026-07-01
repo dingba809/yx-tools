@@ -918,7 +918,7 @@ export DEFAULT_SPEED_LIMIT=50
   "cf_ttl": 60,                                     // 解析记录的 TTL (秒)
   "cf_proxied": false,                              // 是否开启 CF 代理 (小黄云)
   "cf_upload_count": 3,                             // 自动更新最优 IP 的数量 (支持多 IP 轮询)
-  "cf_proxy": "",                                   // 更新 CF DNS 时使用的代理服务器 (如 "http://127.0.0.1:7890"，留空则不使用)
+  "cf_proxy": "",                                   // 更新 CF DNS 时使用的代理服务器 (支持 http/socks5，如 "http://127.0.0.1:7890" 或 "socks5://127.0.0.1:1080"，留空则不使用)
 
   "ros_enabled": false,                             // 是否启用 RouterOS 自动更新
   "ros_host": "192.168.1.1",                        // RouterOS 的 IP 地址
@@ -947,7 +947,7 @@ export DEFAULT_SPEED_LIMIT=50
 >   - 支持更新 VLESS/VMess（`vnext` 结构）以及 Shadowsocks/Trojan（`servers` 结构）类型出站节点的 `address` 地址。
 >   - 成功写回配置文件后，若配置了 `xray_restart_cmd` 重启命令且非空，则会通过系统 Shell 自动执行该命令以重启服务。
 > - **Cloudflare 代理与日志收敛**：
->   - 如果在中国大陆等网络受限环境运行，可配置 `cf_proxy` 参数（支持 HTTP/HTTPS 代理）代理 Cloudflare API 请求（同时支持 `requests` 库和 `curl` 工具）。
+>   - 如果在中国大陆等网络受限环境运行，可配置 `cf_proxy` 参数（支持 HTTP/HTTPS/SOCKS5 代理）代理 Cloudflare API 请求。若 Python 环境缺乏 SOCKS 代理依赖，脚本将自动优雅回退到使用内置 `curl` 执行代理访问，无需额外复杂配置。
 >   - 常规运行状态下，对 Cloudflare 与 RouterOS 的 API 网络操作日志已实现收敛：**成功时不输出底层调试日志，只有当请求失败时（HTTP 状态码非 2xx），才会自动打印完整的请求和响应 Body 详情**，实现极简干净的日志输出。
 > - **安全与旧记录清理**：
 >   - 在更新 Cloudflare DNS 时，脚本会先自动清理该域名下已有的旧 A/AAAA 解析，再重新写入最新的优选 IP，以防累积垃圾解析。
