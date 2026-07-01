@@ -2987,6 +2987,8 @@ def update_routeros_address_list(ips, config):
                 res = requests.get(url, headers=headers, timeout=ros_timeout, verify=ros_verify_ssl)
             elif method == 'POST':
                 res = requests.post(url, headers=headers, json=data, timeout=ros_timeout, verify=ros_verify_ssl)
+            elif method == 'PUT':
+                res = requests.put(url, headers=headers, json=data, timeout=ros_timeout, verify=ros_verify_ssl)
             elif method == 'DELETE':
                 res = requests.delete(url, headers=headers, timeout=ros_timeout, verify=ros_verify_ssl)
         except Exception as e:
@@ -3050,7 +3052,7 @@ def update_routeros_address_list(ips, config):
                 "address": ip,
                 "comment": ros_comment
             }
-            add_res = ros_request("/ip/firewall/address-list", method='POST', data=payload)
+            add_res = ros_request("/ip/firewall/address-list", method='PUT', data=payload)
             if add_res.status_code in [200, 201]:
                 added_count += 1
                 print(f"   ✅ 已成功添加 IP: {ip}")
